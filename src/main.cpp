@@ -1,11 +1,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <WiFiClientSecure.h>
 
-#define WARNING_LIGHT_PIN 0
+#define WARNING_LIGHT_PIN 17
 #define BUTTON_PIN 2
 #define MQTT_SERVER_HOST "test.mosquitto.org"
-#define MQTT_SERVER_PORT 1883
+#define MQTT_SERVER_PORT 8883
 #define MQTT_TOPIC_1 "iot-experiments/evt/counter"
 #define MQTT_TOPIC_2 "iot-experiments/esas/counter"
 
@@ -15,7 +16,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length);
 
 //////////////////////////////////
 
-WiFiClient wifiClient;
+WiFiClientSecure wifiClient;
 PubSubClient mqttClient(wifiClient);
 long lastReconnectAttempt = 0;
 char clientId[20];
@@ -29,6 +30,7 @@ void setup()
 {
   pinMode(WARNING_LIGHT_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  digitalWrite(WARNING_LIGHT_PIN, HIGH);
 
   Serial.begin(115200);
 
@@ -89,12 +91,13 @@ void loop()
 
   if (startWarningLight)
   {
+    startWarningLight = false;
     // turn the LED on (HIGH is the voltage level)
-    digitalWrite(WARNING_LIGHT_PIN, HIGH);
+    digitalWrite(WARNING_LIGHT_PIN, LOW);
     // wait for a second
     delay(5000);
     // turn the LED off by making the voltage LOW
-    digitalWrite(WARNING_LIGHT_PIN, LOW);
+    digitalWrite(WARNING_LIGHT_PIN, HIGH);
   }
 }
 
@@ -154,7 +157,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
       startWarningLight = true;
     }
   }
-  
+
   if (strcmp(MQTT_TOPIC_2, topic) == 0)
   {
     int32_t iValue = atoi(value);
