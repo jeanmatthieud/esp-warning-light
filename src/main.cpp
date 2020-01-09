@@ -1,18 +1,35 @@
 #include <Arduino.h>
-#include <WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
+#include <Adafruit_NeoPixel.h>
+#ifdef ESP32
+#include <WiFi.h>
+#else
+#include <ESP8266WiFi.h>
+#endif
 
+#ifdef ESP32
 #define WARNING_LIGHT_PIN 17
 #define BUTTON_PIN 2
+#define NEOPIXEL_PIN 4
+#else
+#define WARNING_LIGHT_PIN D3
+#define BUTTON_PIN D2
+#define NEOPIXEL_PIN D4
+#endif
+
 #define MQTT_SERVER_HOST "test.mosquitto.org"
 #define MQTT_SERVER_PORT 8883
 #define MQTT_TOPIC_1 "iot-experiments/evt/counter"
 #define MQTT_TOPIC_2 "iot-experiments/esas/counter"
 
+#define COLOR_SATURATION 128
+
 void startSmartConfig();
 boolean reconnectMqttClient();
 void mqttCallback(char *topic, byte *payload, unsigned int length);
+void processConfigButton();
+void displayColor(uint32_t color);
 
 //////////////////////////////////
 
@@ -23,6 +40,7 @@ char clientId[20];
 volatile int32_t topic1CounterValue;
 volatile int32_t topic2CounterValue;
 volatile boolean startWarningLight = false;
+Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 //////////////////////////////////
 
@@ -33,10 +51,21 @@ void setup()
   digitalWrite(WARNING_LIGHT_PIN, HIGH);
 
   Serial.begin(115200);
+  while (!Serial)
+    ; // wait for serial attach
 
+  pixels.begin();
+
+#ifdef ESP32
   //The chip ID is essentially its MAC address(length: 6 bytes).
   uint64_t chipid = ESP.getEfuseMac();
   sprintf(clientId, "ESP_%04X%08X", (uint16_t)(chipid >> 32), (uint32_t)chipid);
+#else
+  uint32_t chipid = ESP.getChipId();
+  sprintf(clientId, "ESP_%08X", chipid);
+#endif
+
+  displayColor(pixels.Color(255, 0, 0));
 
   // Tries to connect with previous credentials or starts smartconfig
   if (WiFi.begin() == WL_CONNECT_FAILED)
@@ -48,6 +77,7 @@ void setup()
   Serial.println("Waiting for WiFi");
   while (WiFi.status() != WL_CONNECTED)
   {
+    processConfigButton();
     delay(500);
     Serial.print(".");
   }
@@ -57,20 +87,17 @@ void setup()
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
+#ifdef ESP8266
+  // The ESP8266 isn't capable to check SSL certificates by it's own
+  wifiClient.setInsecure();
+#endif
   mqttClient.setServer(MQTT_SERVER_HOST, MQTT_SERVER_PORT);
   mqttClient.setCallback(mqttCallback);
 }
 
 void loop()
 {
-  if (digitalRead(BUTTON_PIN) == LOW)
-  {
-    delay(1000);
-    if (digitalRead(BUTTON_PIN) == LOW)
-    {
-      startSmartConfig();
-    }
-  }
+  processConfigButton();
 
   if (!mqttClient.connected())
   {
@@ -101,10 +128,24 @@ void loop()
   }
 }
 
+void processConfigButton()
+{
+  if (digitalRead(BUTTON_PIN) == LOW)
+  {
+    delay(1000);
+    if (digitalRead(BUTTON_PIN) == LOW)
+    {
+      startSmartConfig();
+    }
+  }
+}
+
 void startSmartConfig()
 {
+  displayColor(pixels.Color(0, 0, 255));
+
   // Init WiFi as Station, start SmartConfig
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_STA);
   WiFi.beginSmartConfig();
 
   //Wait for SmartConfig packet from mobile
@@ -121,6 +162,8 @@ void startSmartConfig()
 
 boolean reconnectMqttClient()
 {
+  displayColor(pixels.Color(255, 255, 0));
+
   Serial.println("Attempting MQTT connection...");
   if (mqttClient.connect(clientId))
   {
@@ -128,6 +171,9 @@ boolean reconnectMqttClient()
     mqttClient.publish("iot-experiments/devices", clientId);
     mqttClient.subscribe(MQTT_TOPIC_1);
     mqttClient.subscribe(MQTT_TOPIC_2);
+
+    pixels.clear();
+    pixels.show();
   }
   else
   {
@@ -153,7 +199,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     int32_t iValue = atoi(value);
     if (iValue != topic1CounterValue)
     {
-      iValue = topic1CounterValue;
+      topic1CounterValue = iValue;
       startWarningLight = true;
     }
   }
@@ -163,8 +209,13 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     int32_t iValue = atoi(value);
     if (iValue != topic2CounterValue)
     {
-      iValue = topic2CounterValue;
+      topic2CounterValue = iValue;
       startWarningLight = true;
     }
   }
+}
+
+void displayColor(uint32_t color) {
+  pixels.setPixelColor(0, color);
+  pixels.show();
 }
