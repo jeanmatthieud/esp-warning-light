@@ -2,6 +2,7 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <Adafruit_NeoPixel.h>
+#include <TM1637Display.h>
 #ifdef ESP32
 #include <WiFi.h>
 #else
@@ -12,10 +13,14 @@
 #define WARNING_LIGHT_PIN 17
 #define BUTTON_PIN 2
 #define NEOPIXEL_PIN 4
+#define DISPLAY_CLK 16
+#define DISPLAY_DIO 17
 #else
-#define WARNING_LIGHT_PIN D3
+#define WARNING_LIGHT_PIN D6
 #define BUTTON_PIN D2
 #define NEOPIXEL_PIN D4
+#define DISPLAY_CLK D7
+#define DISPLAY_DIO D1
 #endif
 
 #define MQTT_SERVER_HOST "test.mosquitto.org"
@@ -23,12 +28,11 @@
 #define MQTT_TOPIC_1 "iot-experiments/evt/counter"
 #define MQTT_TOPIC_2 "iot-experiments/esas/counter"
 
-#define COLOR_SATURATION 128
-
 void startSmartConfig();
 boolean reconnectMqttClient();
 void mqttCallback(char *topic, byte *payload, unsigned int length);
 void processConfigButton();
+void processDisplay();
 void displayColor(uint32_t color);
 
 //////////////////////////////////
@@ -37,10 +41,21 @@ WiFiClientSecure wifiClient;
 PubSubClient mqttClient(wifiClient);
 long lastReconnectAttempt = 0;
 char clientId[20];
-volatile int32_t topic1CounterValue;
-volatile int32_t topic2CounterValue;
+volatile int32_t topic1CounterValue = 0;
+volatile int32_t topic2CounterValue = 0;
 volatile boolean startWarningLight = false;
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
+long beginDisplaySequenceMs = 0;
+uint8_t emptyLabel[] = {SEG_G, SEG_G, SEG_G, SEG_G};
+uint8_t topic1Label[] = {SEG_A | SEG_D | SEG_E | SEG_F | SEG_G, SEG_B | SEG_C | SEG_D | SEG_E | SEG_F, SEG_D | SEG_E | SEG_F | SEG_G, 0x00}; // eut
+uint8_t topic2Label[] = {
+    SEG_A | SEG_D | SEG_E | SEG_F | SEG_G,
+    SEG_A | SEG_C | SEG_D | SEG_F | SEG_G,
+    SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G,
+    SEG_A | SEG_C | SEG_D | SEG_F | SEG_G,
+    SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G,
+}; // esas
 
 //////////////////////////////////
 
@@ -54,7 +69,10 @@ void setup()
   while (!Serial)
     ; // wait for serial attach
 
+  beginDisplaySequenceMs = millis();
+
   pixels.begin();
+  display.setBrightness(0x0f);
 
 #ifdef ESP32
   //The chip ID is essentially its MAC address(length: 6 bytes).
@@ -99,6 +117,8 @@ void loop()
 {
   processConfigButton();
 
+  processDisplay();
+
   if (!mqttClient.connected())
   {
     long now = millis();
@@ -137,6 +157,37 @@ void processConfigButton()
     {
       startSmartConfig();
     }
+  }
+}
+
+void processDisplay()
+{
+  if (!mqttClient.connected())
+  {
+    display.setSegments(emptyLabel);
+    return;
+  }
+
+  long msSinceLastBeginSequence = millis() - beginDisplaySequenceMs;
+  if (msSinceLastBeginSequence < 2000)
+  {
+    display.setSegments(topic1Label);
+  }
+  else if (msSinceLastBeginSequence < 4000)
+  {
+    display.showNumberDec(topic1CounterValue, false);
+  }
+  else if (msSinceLastBeginSequence < 6000)
+  {
+    display.setSegments(topic2Label);
+  }
+  else if (msSinceLastBeginSequence < 8000)
+  {
+    display.showNumberDec(topic2CounterValue, false);
+  }
+  else
+  {
+    beginDisplaySequenceMs = millis();
   }
 }
 
@@ -215,7 +266,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
   }
 }
 
-void displayColor(uint32_t color) {
+void displayColor(uint32_t color)
+{
   pixels.setPixelColor(0, color);
   pixels.show();
 }
