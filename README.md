@@ -1,5 +1,6 @@
 # Old fashioned connected warnin light
-This project is for the ESP32 or the ESP8266.
+This project was originally for the ESP32 and the ESP8266.
+**This branch is only for the ESP8266, and allows the use of MQTT over websockets thanks to another MQTT client library.**
 It can be compiled and flashed with PlatfomIO.
 
 The full article is available here:

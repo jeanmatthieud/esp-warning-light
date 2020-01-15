@@ -1,49 +1,35 @@
 #include <Arduino.h>
-#include <PubSubClient.h>
-#include <WiFiClientSecure.h>
+#include <ESP8266MQTTClient.h>
 #include <Adafruit_NeoPixel.h>
 #include <TM1637Display.h>
-#ifdef ESP32
-#include <WiFi.h>
-#else
 #include <ESP8266WiFi.h>
-#endif
 
-#ifdef ESP32
-#define WARNING_LIGHT_PIN 17
-#define BUTTON_PIN 2
-#define NEOPIXEL_PIN 4
-#define DISPLAY_CLK 16
-#define DISPLAY_DIO 17
-#else
 #define WARNING_LIGHT_PIN D6
 #define BUTTON_PIN D2
 #define NEOPIXEL_PIN D4
 #define DISPLAY_CLK D7
 #define DISPLAY_DIO D1
-#endif
 
-#define MQTT_SERVER_HOST "test.mosquitto.org"
-#define MQTT_SERVER_PORT 8883
+#define MQTT_URI "ws://test.mosquitto.org:8080"
 #define MQTT_TOPIC_1 "iot-experiments/evt/counter"
 #define MQTT_TOPIC_2 "iot-experiments/esas/counter"
 
 void startSmartConfig();
-boolean reconnectMqttClient();
-void mqttCallback(char *topic, byte *payload, unsigned int length);
+void mqttDataCallback(String topic, String data, bool cont);
+void mqttConnectedCallback();
+void mqttDisconnectedCallback();
 void processConfigButton();
 void processDisplay();
+void processWarningLight();
 void displayColor(uint32_t color);
 
 //////////////////////////////////
 
-WiFiClientSecure wifiClient;
-PubSubClient mqttClient(wifiClient);
-long lastReconnectAttempt = 0;
-char clientId[20];
+MQTTClient mqttClient;
+bool connectedToMqtt = false;
 volatile int32_t topic1CounterValue = 0;
 volatile int32_t topic2CounterValue = 0;
-volatile boolean startWarningLight = false;
+volatile long startWarningLight = 0;
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
 long beginDisplaySequenceMs = 0;
@@ -74,15 +60,6 @@ void setup()
   pixels.begin();
   display.setBrightness(0x0f);
 
-#ifdef ESP32
-  //The chip ID is essentially its MAC address(length: 6 bytes).
-  uint64_t chipid = ESP.getEfuseMac();
-  sprintf(clientId, "ESP_%04X%08X", (uint16_t)(chipid >> 32), (uint32_t)chipid);
-#else
-  uint32_t chipid = ESP.getChipId();
-  sprintf(clientId, "ESP_%08X", chipid);
-#endif
-
   displayColor(pixels.Color(255, 0, 0));
 
   // Tries to connect with previous credentials or starts smartconfig
@@ -105,12 +82,12 @@ void setup()
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
-#ifdef ESP8266
-  // The ESP8266 isn't capable to check SSL certificates by it's own
-  wifiClient.setInsecure();
-#endif
-  mqttClient.setServer(MQTT_SERVER_HOST, MQTT_SERVER_PORT);
-  mqttClient.setCallback(mqttCallback);
+  mqttClient.onData(mqttDataCallback);
+  mqttClient.onConnect(mqttConnectedCallback);
+  mqttClient.onDisconnect(mqttDisconnectedCallback);
+
+  displayColor(pixels.Color(255, 255, 0));
+  mqttClient.begin(MQTT_URI);
 }
 
 void loop()
@@ -119,33 +96,9 @@ void loop()
 
   processDisplay();
 
-  if (!mqttClient.connected())
-  {
-    long now = millis();
-    if (now - lastReconnectAttempt > 5000)
-    {
-      lastReconnectAttempt = now;
-      if (reconnectMqttClient())
-      {
-        lastReconnectAttempt = 0;
-      }
-    }
-  }
-  else
-  {
-    mqttClient.loop();
-  }
+  processWarningLight();
 
-  if (startWarningLight)
-  {
-    startWarningLight = false;
-    // turn the LED on (HIGH is the voltage level)
-    digitalWrite(WARNING_LIGHT_PIN, LOW);
-    // wait for a second
-    delay(5000);
-    // turn the LED off by making the voltage LOW
-    digitalWrite(WARNING_LIGHT_PIN, HIGH);
-  }
+  mqttClient.handle();
 }
 
 void processConfigButton()
@@ -162,7 +115,7 @@ void processConfigButton()
 
 void processDisplay()
 {
-  if (!mqttClient.connected())
+  if (!connectedToMqtt)
   {
     display.setSegments(emptyLabel);
     return;
@@ -191,6 +144,20 @@ void processDisplay()
   }
 }
 
+void processWarningLight()
+{
+  if (startWarningLight != 0 && (millis() - startWarningLight) < 5000)
+  {
+    // turn the LED on (HIGH is the voltage level)
+    digitalWrite(WARNING_LIGHT_PIN, LOW);
+  }
+  else
+  {
+    // turn the LED off by making the voltage LOW
+    digitalWrite(WARNING_LIGHT_PIN, HIGH);
+  }
+}
+
 void startSmartConfig()
 {
   displayColor(pixels.Color(0, 0, 255));
@@ -211,57 +178,48 @@ void startSmartConfig()
   Serial.println("SmartConfig received.");
 }
 
-boolean reconnectMqttClient()
+void mqttConnectedCallback()
 {
-  displayColor(pixels.Color(255, 255, 0));
-
-  Serial.println("Attempting MQTT connection...");
-  if (mqttClient.connect(clientId))
-  {
-    Serial.println("Connected to MQTT server");
-    mqttClient.publish("iot-experiments/devices", clientId);
-    mqttClient.subscribe(MQTT_TOPIC_1);
-    mqttClient.subscribe(MQTT_TOPIC_2);
-
-    pixels.clear();
-    pixels.show();
-  }
-  else
-  {
-    Serial.print("Failed, rc=");
-    Serial.println(mqttClient.state());
-  }
-  return mqttClient.connected();
+  Serial.println("MQTT: Connected");
+  connectedToMqtt = true;
+  pixels.clear();
+  pixels.show();
+  mqttClient.subscribe(MQTT_TOPIC_1);
+  mqttClient.subscribe(MQTT_TOPIC_2);
 }
 
-void mqttCallback(char *topic, byte *payload, unsigned int length)
+void mqttDisconnectedCallback()
+{
+  Serial.println("MQTT: Disconnected");
+  connectedToMqtt = false;
+  displayColor(pixels.Color(255, 255, 0));
+}
+
+void mqttDataCallback(String topic, String data, bool cont)
 {
   Serial.print("MQTT message arrived [");
   Serial.print(topic);
   Serial.print("] ");
 
-  char value[length + 1];
-  strncpy(value, (char *)payload, length);
-  value[length] = '\0';
-  Serial.println(value);
+  Serial.println(data);
 
-  if (strcmp(MQTT_TOPIC_1, topic) == 0)
+  if (strcmp(MQTT_TOPIC_1, topic.c_str()) == 0)
   {
-    int32_t iValue = atoi(value);
+    int32_t iValue = atoi(data.c_str());
     if (iValue != topic1CounterValue)
     {
       topic1CounterValue = iValue;
-      startWarningLight = true;
+      startWarningLight = millis();
     }
   }
 
-  if (strcmp(MQTT_TOPIC_2, topic) == 0)
+  if (strcmp(MQTT_TOPIC_2, topic.c_str()) == 0)
   {
-    int32_t iValue = atoi(value);
+    int32_t iValue = atoi(data.c_str());
     if (iValue != topic2CounterValue)
     {
       topic2CounterValue = iValue;
-      startWarningLight = true;
+      startWarningLight = millis();
     }
   }
 }
