@@ -33,6 +33,7 @@ boolean reconnectMqttClient();
 void mqttCallback(char *topic, byte *payload, unsigned int length);
 void processConfigButton();
 void processDisplay();
+void processWarningLight();
 void displayColor(uint32_t color);
 
 //////////////////////////////////
@@ -43,7 +44,7 @@ long lastReconnectAttempt = 0;
 char clientId[20];
 volatile int32_t topic1CounterValue = 0;
 volatile int32_t topic2CounterValue = 0;
-volatile boolean startWarningLight = false;
+volatile long startWarningLight = false;
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
 long beginDisplaySequenceMs = 0;
@@ -119,6 +120,8 @@ void loop()
 
   processDisplay();
 
+  processWarningLight();
+
   if (!mqttClient.connected())
   {
     long now = millis();
@@ -134,17 +137,6 @@ void loop()
   else
   {
     mqttClient.loop();
-  }
-
-  if (startWarningLight)
-  {
-    startWarningLight = false;
-    // turn the LED on (HIGH is the voltage level)
-    digitalWrite(WARNING_LIGHT_PIN, LOW);
-    // wait for a second
-    delay(5000);
-    // turn the LED off by making the voltage LOW
-    digitalWrite(WARNING_LIGHT_PIN, HIGH);
   }
 }
 
@@ -188,6 +180,20 @@ void processDisplay()
   else
   {
     beginDisplaySequenceMs = millis();
+  }
+}
+
+void processWarningLight()
+{
+  if (startWarningLight != 0 && (millis() - startWarningLight) < 5000)
+  {
+    // turn the LED on (HIGH is the voltage level)
+    digitalWrite(WARNING_LIGHT_PIN, LOW);
+  }
+  else
+  {
+    // turn the LED off by making the voltage LOW
+    digitalWrite(WARNING_LIGHT_PIN, HIGH);
   }
 }
 
@@ -251,7 +257,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     if (iValue != topic1CounterValue)
     {
       topic1CounterValue = iValue;
-      startWarningLight = true;
+      startWarningLight = millis();
     }
   }
 
@@ -261,7 +267,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     if (iValue != topic2CounterValue)
     {
       topic2CounterValue = iValue;
-      startWarningLight = true;
+      startWarningLight = millis();
     }
   }
 }
