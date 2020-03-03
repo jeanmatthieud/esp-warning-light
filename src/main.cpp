@@ -233,7 +233,6 @@ void displayText(String text)
     int index = text.charAt(i) - 32;
     if (index >= 0 && index < 96)
     {
-      Serial.println(index);
       label[i] = SevenSegmentASCII[index];
     }
   }
