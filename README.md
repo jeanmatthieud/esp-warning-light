@@ -5,11 +5,16 @@ It can be compiled and flashed with PlatfomIO.
 The full article is available here:
 https://www.iot-experiments.com/esp32-warning-light/
 
+This branch is quite different as the master.
+In this release, the ESP connects on WiFi to a websocket server, receive some commands and execute them.
+
 ## Neopixel colors
 * Red: looking for WiFi
-* Yellow: WiFi OK; connecting to MQTT server
+* Yellow: WiFi OK; connecting to WS server
 * Blue: smartconfig enabled. Waiting for WiFi credentials.
 * Off: connected
+
+After initialisation, the ESP displays the color sent by the server.
 
 ## Components
 * Old warning lamp at 12V

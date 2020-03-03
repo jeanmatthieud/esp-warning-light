@@ -1,6 +1,5 @@
 #include <Arduino.h>
-#include <PubSubClient.h>
-#include <WiFiClientSecure.h>
+#include <WebSocketsClient.h>
 #include <Adafruit_NeoPixel.h>
 #include <TM1637Display.h>
 #ifdef ESP32
@@ -23,28 +22,26 @@
 #define DISPLAY_DIO D1
 #endif
 
-#define MQTT_SERVER_HOST "test.mosquitto.org"
-#define MQTT_SERVER_PORT 8883
-#define MQTT_TOPIC_1 "iot-experiments/evt/counter"
-#define MQTT_TOPIC_2 "iot-experiments/esas/counter"
+#define WS_SERVER_HOST "172.24.1.1"
+#define WS_SERVER_PORT 8080
 
 void startSmartConfig();
-boolean reconnectMqttClient();
-void mqttCallback(char *topic, byte *payload, unsigned int length);
 void processConfigButton();
 void processDisplay();
 void processWarningLight();
+void processMessage(const uint8_t *message);
 void displayColor(uint32_t color);
+void webSocketEvent(WStype_t type, uint8_t *payload, size_t length);
 
 //////////////////////////////////
 
-WiFiClientSecure wifiClient;
-PubSubClient mqttClient(wifiClient);
+WebSocketsClient webSocket;
 long lastReconnectAttempt = 0;
 char clientId[20];
 volatile int32_t topic1CounterValue = 0;
 volatile int32_t topic2CounterValue = 0;
-volatile long startWarningLight = false;
+volatile long startWarningLight = 0;
+volatile bool webSocketConnected = false;
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
 long beginDisplaySequenceMs = 0;
@@ -85,6 +82,7 @@ void setup()
 #endif
 
   displayColor(pixels.Color(255, 0, 0));
+  display.setSegments(emptyLabel); // TODO : Display something for 'WiFi'
 
   // Tries to connect with previous credentials or starts smartconfig
   if (WiFi.begin() == WL_CONNECT_FAILED)
@@ -102,16 +100,25 @@ void setup()
   }
 
   Serial.println("WiFi Connected.");
+  displayColor(pixels.Color(255, 255, 0));
 
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
 #ifdef ESP8266
   // The ESP8266 isn't capable to check SSL certificates by it's own
-  wifiClient.setInsecure();
+  // wifiClient.setInsecure();
 #endif
-  mqttClient.setServer(MQTT_SERVER_HOST, MQTT_SERVER_PORT);
-  mqttClient.setCallback(mqttCallback);
+
+  webSocket.begin(WS_SERVER_HOST, WS_SERVER_PORT, "/");
+  webSocket.onEvent(webSocketEvent);
+  // webSocket.setAuthorization(clientId, "password");
+  webSocket.setReconnectInterval(5000);
+  // start heartbeat (optional)
+  // ping server every 15000 ms
+  // expect pong from server within 3000 ms
+  // consider connection disconnected if pong is not received 2 times
+  webSocket.enableHeartbeat(15000, 3000, 2);
 }
 
 void loop()
@@ -122,21 +129,85 @@ void loop()
 
   processWarningLight();
 
-  if (!mqttClient.connected())
+  webSocket.loop();
+}
+
+void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
+{
+  switch (type)
   {
-    long now = millis();
-    if (now - lastReconnectAttempt > 5000)
-    {
-      lastReconnectAttempt = now;
-      if (reconnectMqttClient())
-      {
-        lastReconnectAttempt = 0;
-      }
-    }
+  case WStype_DISCONNECTED:
+    Serial.println("[WSc] Disconnected!");
+    displayColor(pixels.Color(255, 255, 0));
+    webSocketConnected = false;
+    break;
+  case WStype_CONNECTED:
+  {
+    Serial.printf("[WSc] Connected to url: %s\n", payload);
+    webSocketConnected = true;
+    pixels.clear();
+    pixels.show();
+  }
+  break;
+  case WStype_TEXT:
+    Serial.printf("[WSc] get text: %s\n", payload);
+
+    processMessage(payload);
+
+    // send message to server
+    // webSocket.sendTXT("message here");
+    break;
+  case WStype_BIN:
+    Serial.printf("[WSc] get binary length: %u\n", length);
+    // hexdump(payload, length);
+    // send data to server
+    // webSocket.sendBIN(payload, length);
+    break;
+  case WStype_PING:
+    Serial.printf("[WSc] get ping\n");
+    break;
+  case WStype_PONG:
+    Serial.printf("[WSc] get pong\n");
+    break;
+  }
+}
+
+void processMessage(const uint8_t *message)
+{
+  String value = String((char *)message);
+  if (value.length() == 0)
+  {
+    return;
+  }
+
+  webSocket.sendTXT(message);
+  if (value.startsWith("AT+COLOR="))
+  {
+    int r, g, b;
+    sscanf(value.c_str(), "AT+COLOR=%d;%d;%d", &r, &g, &b);
+    displayColor(pixels.Color(r, g, b));
+  }
+  else if (value.startsWith("AT+LAMP=ON"))
+  {
+    // turn the LED on (HIGH is the voltage level)
+    digitalWrite(WARNING_LIGHT_PIN, LOW);
+  }
+  else if (value.startsWith("AT+LAMP=OFF"))
+  {
+    // turn the LED off by making the voltage LOW
+    digitalWrite(WARNING_LIGHT_PIN, HIGH);
+  }
+  else if (value.startsWith("AT+COUNTER1="))
+  {
+    sscanf(value.c_str(), "AT+COUNTER1=%d", &topic1CounterValue);
+  }
+  else if (value.startsWith("AT+COUNTER2="))
+  {
+    sscanf(value.c_str(), "AT+COUNTER2=%d", &topic2CounterValue);
   }
   else
   {
-    mqttClient.loop();
+    webSocket.sendTXT("ERROR");
   }
 }
 
@@ -154,7 +225,7 @@ void processConfigButton()
 
 void processDisplay()
 {
-  if (!mqttClient.connected())
+  if (!webSocketConnected)
   {
     display.setSegments(emptyLabel);
     return;
@@ -215,61 +286,6 @@ void startSmartConfig()
 
   Serial.println("");
   Serial.println("SmartConfig received.");
-}
-
-boolean reconnectMqttClient()
-{
-  displayColor(pixels.Color(255, 255, 0));
-
-  Serial.println("Attempting MQTT connection...");
-  if (mqttClient.connect(clientId))
-  {
-    Serial.println("Connected to MQTT server");
-    mqttClient.publish("iot-experiments/devices", clientId);
-    mqttClient.subscribe(MQTT_TOPIC_1);
-    mqttClient.subscribe(MQTT_TOPIC_2);
-
-    pixels.clear();
-    pixels.show();
-  }
-  else
-  {
-    Serial.print("Failed, rc=");
-    Serial.println(mqttClient.state());
-  }
-  return mqttClient.connected();
-}
-
-void mqttCallback(char *topic, byte *payload, unsigned int length)
-{
-  Serial.print("MQTT message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-
-  char value[length + 1];
-  strncpy(value, (char *)payload, length);
-  value[length] = '\0';
-  Serial.println(value);
-
-  if (strcmp(MQTT_TOPIC_1, topic) == 0)
-  {
-    int32_t iValue = atoi(value);
-    if (iValue != topic1CounterValue)
-    {
-      topic1CounterValue = iValue;
-      startWarningLight = millis();
-    }
-  }
-
-  if (strcmp(MQTT_TOPIC_2, topic) == 0)
-  {
-    int32_t iValue = atoi(value);
-    if (iValue != topic2CounterValue)
-    {
-      topic2CounterValue = iValue;
-      startWarningLight = millis();
-    }
-  }
 }
 
 void displayColor(uint32_t color)
