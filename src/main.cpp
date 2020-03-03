@@ -7,6 +7,7 @@
 #else
 #include <ESP8266WiFi.h>
 #endif
+#include "seven_segment_ascii.h"
 
 #ifdef ESP32
 #define WARNING_LIGHT_PIN 17
@@ -25,35 +26,22 @@
 #define WS_SERVER_HOST "172.24.1.1"
 #define WS_SERVER_PORT 8080
 
+inline int min(int a, int b) { return ((a) < (b) ? (a) : (b)); }
+
 void startSmartConfig();
 void processConfigButton();
-void processDisplay();
-void processWarningLight();
 void processMessage(const uint8_t *message);
 void displayColor(uint32_t color);
+void displayText(String text);
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length);
 
 //////////////////////////////////
 
 WebSocketsClient webSocket;
-long lastReconnectAttempt = 0;
 char clientId[20];
-volatile int32_t topic1CounterValue = 0;
-volatile int32_t topic2CounterValue = 0;
-volatile long startWarningLight = 0;
-volatile bool webSocketConnected = false;
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
-long beginDisplaySequenceMs = 0;
 uint8_t emptyLabel[] = {SEG_G, SEG_G, SEG_G, SEG_G};
-uint8_t topic1Label[] = {SEG_A | SEG_D | SEG_E | SEG_F | SEG_G, SEG_B | SEG_C | SEG_D | SEG_E | SEG_F, SEG_D | SEG_E | SEG_F | SEG_G, 0x00}; // eut
-uint8_t topic2Label[] = {
-    SEG_A | SEG_D | SEG_E | SEG_F | SEG_G,
-    SEG_A | SEG_C | SEG_D | SEG_F | SEG_G,
-    SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G,
-    SEG_A | SEG_C | SEG_D | SEG_F | SEG_G,
-    SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G,
-}; // esas
 
 //////////////////////////////////
 
@@ -66,8 +54,6 @@ void setup()
   Serial.begin(115200);
   while (!Serial)
     ; // wait for serial attach
-
-  beginDisplaySequenceMs = millis();
 
   pixels.begin();
   display.setBrightness(0x0f);
@@ -125,10 +111,6 @@ void loop()
 {
   processConfigButton();
 
-  processDisplay();
-
-  processWarningLight();
-
   webSocket.loop();
 }
 
@@ -139,12 +121,10 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
   case WStype_DISCONNECTED:
     Serial.println("[WSc] Disconnected!");
     displayColor(pixels.Color(255, 255, 0));
-    webSocketConnected = false;
     break;
   case WStype_CONNECTED:
   {
     Serial.printf("[WSc] Connected to url: %s\n", payload);
-    webSocketConnected = true;
     pixels.clear();
     pixels.show();
   }
@@ -197,13 +177,9 @@ void processMessage(const uint8_t *message)
     // turn the LED off by making the voltage LOW
     digitalWrite(WARNING_LIGHT_PIN, HIGH);
   }
-  else if (value.startsWith("AT+COUNTER1="))
+  else if (value.startsWith("AT+DISPLAY_TXT="))
   {
-    sscanf(value.c_str(), "AT+COUNTER1=%d", &topic1CounterValue);
-  }
-  else if (value.startsWith("AT+COUNTER2="))
-  {
-    sscanf(value.c_str(), "AT+COUNTER2=%d", &topic2CounterValue);
+    displayText(value.substring(15));
   }
   else
   {
@@ -220,51 +196,6 @@ void processConfigButton()
     {
       startSmartConfig();
     }
-  }
-}
-
-void processDisplay()
-{
-  if (!webSocketConnected)
-  {
-    display.setSegments(emptyLabel);
-    return;
-  }
-
-  long msSinceLastBeginSequence = millis() - beginDisplaySequenceMs;
-  if (msSinceLastBeginSequence < 2000)
-  {
-    display.setSegments(topic1Label);
-  }
-  else if (msSinceLastBeginSequence < 4000)
-  {
-    display.showNumberDec(topic1CounterValue, false);
-  }
-  else if (msSinceLastBeginSequence < 6000)
-  {
-    display.setSegments(topic2Label);
-  }
-  else if (msSinceLastBeginSequence < 8000)
-  {
-    display.showNumberDec(topic2CounterValue, false);
-  }
-  else
-  {
-    beginDisplaySequenceMs = millis();
-  }
-}
-
-void processWarningLight()
-{
-  if (startWarningLight != 0 && (millis() - startWarningLight) < 5000)
-  {
-    // turn the LED on (HIGH is the voltage level)
-    digitalWrite(WARNING_LIGHT_PIN, LOW);
-  }
-  else
-  {
-    // turn the LED off by making the voltage LOW
-    digitalWrite(WARNING_LIGHT_PIN, HIGH);
   }
 }
 
@@ -292,4 +223,19 @@ void displayColor(uint32_t color)
 {
   pixels.setPixelColor(0, color);
   pixels.show();
+}
+
+void displayText(String text)
+{
+  uint8_t label[] = {0x00, 0x00, 0x00, 0x00};
+  for (int i = 0; i < min(text.length(), 4); i++)
+  {
+    int index = text.charAt(i) - 32;
+    if (index >= 0 && index < 96)
+    {
+      Serial.println(index);
+      label[i] = SevenSegmentASCII[index];
+    }
+  }
+  display.setSegments(label);
 }
