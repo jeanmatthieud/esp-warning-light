@@ -121,6 +121,8 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
   case WStype_DISCONNECTED:
     Serial.println("[WSc] Disconnected!");
     displayColor(pixels.Color(255, 255, 0));
+    // Stop lamp
+    digitalWrite(WARNING_LIGHT_PIN, HIGH);
     break;
   case WStype_CONNECTED:
   {
