@@ -38,7 +38,6 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length);
 //////////////////////////////////
 
 WebSocketsClient webSocket;
-char clientId[20];
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
 uint8_t emptyLabel[] = {SEG_G, SEG_G, SEG_G, SEG_G};
@@ -57,15 +56,6 @@ void setup()
 
   pixels.begin();
   display.setBrightness(0x0f);
-
-#ifdef ESP32
-  //The chip ID is essentially its MAC address(length: 6 bytes).
-  uint64_t chipid = ESP.getEfuseMac();
-  sprintf(clientId, "ESP_%04X%08X", (uint16_t)(chipid >> 32), (uint32_t)chipid);
-#else
-  uint32_t chipid = ESP.getChipId();
-  sprintf(clientId, "ESP_%08X", chipid);
-#endif
 
   displayColor(pixels.Color(255, 0, 0));
   display.setSegments(emptyLabel); // TODO : Display something for 'WiFi'
@@ -90,11 +80,6 @@ void setup()
 
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
-
-#ifdef ESP8266
-  // The ESP8266 isn't capable to check SSL certificates by it's own
-  // wifiClient.setInsecure();
-#endif
 
   webSocket.begin(WS_SERVER_HOST, WS_SERVER_PORT, "/");
   webSocket.onEvent(webSocketEvent);
@@ -121,29 +106,20 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
   case WStype_DISCONNECTED:
     Serial.println("[WSc] Disconnected!");
     displayColor(pixels.Color(255, 255, 0));
-    // Stop lamp
+    // Stop lamp when disconnected
     digitalWrite(WARNING_LIGHT_PIN, HIGH);
     break;
   case WStype_CONNECTED:
   {
     Serial.printf("[WSc] Connected to url: %s\n", payload);
+    // The color of the pixel is managed by websocket
     pixels.clear();
     pixels.show();
   }
   break;
   case WStype_TEXT:
     Serial.printf("[WSc] get text: %s\n", payload);
-
     processMessage(payload);
-
-    // send message to server
-    // webSocket.sendTXT("message here");
-    break;
-  case WStype_BIN:
-    Serial.printf("[WSc] get binary length: %u\n", length);
-    // hexdump(payload, length);
-    // send data to server
-    // webSocket.sendBIN(payload, length);
     break;
   case WStype_PING:
     Serial.printf("[WSc] get ping\n");
