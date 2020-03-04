@@ -110,13 +110,11 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
     digitalWrite(WARNING_LIGHT_PIN, HIGH);
     break;
   case WStype_CONNECTED:
-  {
     Serial.printf("[WSc] Connected to url: %s\n", payload);
     // The color of the pixel is managed by websocket
     pixels.clear();
     pixels.show();
-  }
-  break;
+    break;
   case WStype_TEXT:
     Serial.printf("[WSc] get text: %s\n", payload);
     processMessage(payload);
